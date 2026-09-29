@@ -9,6 +9,7 @@
   const orbBtn = $("orbBtn"), stageTitle = $("stageTitle"), stageSub = $("stageSub");
   const stageError = $("stageError");
   const replayBtn = $("replayBtn"), stopBtn = $("stopBtn"), autoSpeak = $("autoSpeak");
+  const pauseBtn = $("pauseBtn"), voiceSel = $("voiceSel");
   const messages = $("messages"), convoEmpty = $("convoEmpty"), modelTag = $("modelTag");
   const clearBtn = $("clearBtn"), composer = $("composer"), textInput = $("textInput");
   const chatError = $("chatError");
@@ -40,14 +41,14 @@
     processing: ["Thinking…", "Transcribing and answering"],
     speaking: ["Speaking…", "Tap stop to interrupt"],
   };
-  function setState(name) {
+  function setState(name, sub) {
     orbBtn.dataset.state = name;
     orbBtn.setAttribute("aria-label",
       name === "idle" ? "Tap to speak" :
       name === "listening" ? "Listening. Tap to stop recording" :
       name === "processing" ? "Processing your message" : "Speaking the answer");
     stageTitle.textContent = STATES[name][0];
-    stageSub.textContent = STATES[name][1];
+    stageSub.textContent = (typeof sub === "string" && sub) ? sub : STATES[name][1];
   }
   function setStageError(msg) {
     if (!msg) { hide(stageError); stageError.textContent = ""; return; }
@@ -82,6 +83,9 @@
         statusText.title = d.message || "Add your Groq API key via Settings or .env";
       }
       renderKeyState(d);
+      if (Array.isArray(d.tts_voices) && d.tts_voices.length) TTS_VOICES = d.tts_voices;
+      if (typeof d.tts_voice === "string" && d.tts_voice) TTS_DEFAULT = d.tts_voice;
+      fillVoices(TTS_VOICES, TTS_DEFAULT);
     } catch {
       apiStatus.classList.remove("checking");
       apiStatus.classList.add("bad");
@@ -191,6 +195,15 @@
     } else {
       div.className = "msg ai";
       label.textContent = "VoiceAI · " + now();
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "play-one";
+      play.setAttribute("aria-label", "Play this answer aloud");
+      play.title = "Play this answer aloud";
+      play.textContent = "🔊";
+      play.addEventListener("click", () => speakAnswer(text, div));
+      label.appendChild(document.createTextNode(" "));
+      label.appendChild(play);
       body.textContent = text;
     }
     div.appendChild(label);
@@ -200,7 +213,121 @@
     return div;
   }
 
-  /* ---------- browser TTS ---------- */
+  /* ---------- voice output: premium Groq audio with browser fallback ---------- */
+  const premiumAudio = new Audio();
+  premiumAudio.preload = "auto";
+  let audioUrl = null;
+  let speakAbort = null;
+  let premiumActive = false;
+  let userPaused = false;
+  let pendingText = "";
+  let pendingCard = null;
+  let TTS_VOICES = ["autumn", "diana", "hannah", "austin", "daniel", "troy"];
+  let TTS_DEFAULT = "autumn";
+
+  function selectedVoice() {
+    try {
+      const v = localStorage.getItem("voiceai_voice");
+      if (v && TTS_VOICES.includes(v)) return v;
+    } catch {}
+    return TTS_DEFAULT;
+  }
+  function freeAudioUrl() {
+    if (audioUrl) { try { URL.revokeObjectURL(audioUrl); } catch {} audioUrl = null; }
+  }
+  function markIdle() {
+    if (lastAiCard) lastAiCard.classList.remove("speaking-now");
+    stopBtn.disabled = true;
+    pauseBtn.disabled = true;
+    pauseBtn.textContent = "⏸ Pause";
+    userPaused = false;
+    if (!busy && !recording) setState("idle");
+  }
+  function stopAllAudio() {
+    if (speakAbort) { try { speakAbort.abort(); } catch {} speakAbort = null; }
+    premiumActive = false;
+    try { premiumAudio.pause(); } catch {}
+    try { premiumAudio.removeAttribute("src"); premiumAudio.load(); } catch {}
+    freeAudioUrl();
+    try { speechSynthesis.cancel(); } catch {}
+    markIdle();
+  }
+  premiumAudio.addEventListener("play", () => {
+    setState("speaking");
+    stopBtn.disabled = false;
+    pauseBtn.disabled = false;
+    if (pendingCard && document.contains(pendingCard)) {
+      pendingCard.classList.add("speaking-now");
+      lastAiCard = pendingCard;
+    }
+  });
+  premiumAudio.addEventListener("ended", () => {
+    premiumActive = false;
+    freeAudioUrl();
+    markIdle();
+  });
+  premiumAudio.addEventListener("error", () => {
+    if (!premiumActive) return;
+    const t = pendingText, card = pendingCard;
+    premiumActive = false;
+    freeAudioUrl();
+    speakBrowser(t, card, true);
+  });
+
+  async function playPremium(text, card) {
+    stopAllAudio();
+    setState("processing", "Loading premium voice…");
+    const ctrl = new AbortController();
+    speakAbort = ctrl;
+    let res;
+    try {
+      res = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, voice: selectedVoice() }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+      speakBrowser(text, card, true);
+      return;
+    } finally {
+      if (speakAbort === ctrl) speakAbort = null;
+    }
+    if (!res.ok) {
+      let msg = "";
+      try { msg = (await res.json()).error || ""; } catch {}
+      if (res.status === 401) {
+        // Auth problems can't be worked around: surface them.
+        addMessage("error", msg || "Voice request failed. Please try again.");
+        setState("idle");
+        return;
+      }
+      // Anything else (model terms not accepted, busy, etc.): free fallback.
+      speakBrowser(text, card, msg);
+      return;
+    }
+    const blob = await res.blob().catch(() => null);
+    if (!blob || !blob.size) { speakBrowser(text, card, true); return; }
+    freeAudioUrl();
+    audioUrl = URL.createObjectURL(blob);
+    pendingText = text;
+    pendingCard = card;
+    premiumActive = true;
+    userPaused = false;
+    premiumAudio.src = audioUrl;
+    try {
+      await premiumAudio.play();
+    } catch {
+      speakBrowser(text, card, true);
+    }
+  }
+  function speakAnswer(text, card) {
+    if (!text) return;
+    playPremium(text, card);
+  }
+
+  /* ---------- browser TTS (fallback) ---------- */
   function pickVoice() {
     try {
       const voices = speechSynthesis.getVoices() || [];
@@ -210,20 +337,18 @@
       return null;
     }
   }
-  function stopSpeaking() {
-    if (!hasTts) return;
-    try { speechSynthesis.cancel(); } catch {}
-    if (lastAiCard) lastAiCard.classList.remove("speaking-now");
-    stopBtn.disabled = true;
-    if (!busy && !recording) setState("idle");
-  }
-  function speak(text, card) {
+  function speakBrowser(text, card, note) {
+    if (note) {
+      setStageError(typeof note === "string" && note
+        ? note.slice(0, 400)
+        : "Premium voice unavailable — playing the browser voice instead.");
+    }
     if (!hasTts) {
       setChatError("This browser has no text-to-speech voices. You can still read the answers above.");
       setState("idle");
       return;
     }
-    stopSpeaking();
+    stopAllAudio();
     try {
       const u = new SpeechSynthesisUtterance(text);
       const v = pickVoice();
@@ -232,13 +357,10 @@
       u.onstart = () => {
         setState("speaking");
         stopBtn.disabled = false;
+        pauseBtn.disabled = false;
         if (card) { card.classList.add("speaking-now"); lastAiCard = card; }
       };
-      const done = () => {
-        if (lastAiCard) lastAiCard.classList.remove("speaking-now");
-        stopBtn.disabled = true;
-        if (!busy && !recording) setState("idle");
-      };
+      const done = () => { markIdle(); };
       u.onend = done;
       u.onerror = done;
       speechSynthesis.speak(u);
@@ -247,11 +369,34 @@
       setState("idle");
     }
   }
-  stopBtn.addEventListener("click", stopSpeaking);
+  stopBtn.addEventListener("click", stopAllAudio);
+  pauseBtn.addEventListener("click", () => {
+    if (premiumActive) {
+      if (!premiumAudio.paused) {
+        premiumAudio.pause();
+        userPaused = true;
+        pauseBtn.textContent = "▶ Resume";
+      } else if (userPaused) {
+        userPaused = false;
+        pauseBtn.textContent = "⏸ Pause";
+        premiumAudio.play().catch(() => {});
+      }
+      return;
+    }
+    try {
+      if (speechSynthesis.speaking && !speechSynthesis.paused) {
+        speechSynthesis.pause();
+        pauseBtn.textContent = "▶ Resume";
+      } else if (speechSynthesis.paused) {
+        speechSynthesis.resume();
+        pauseBtn.textContent = "⏸ Pause";
+      }
+    } catch {}
+  });
   replayBtn.addEventListener("click", () => {
     if (!lastAnswer) return;
     const card = lastAiCard && document.contains(lastAiCard) ? lastAiCard : null;
-    speak(lastAnswer, card);
+    speakAnswer(lastAnswer, card);
   });
 
   /* ---------- chat ---------- */
@@ -283,7 +428,7 @@
         modelTag.textContent = "◈ " + data.model;
         modelTag.hidden = false;
       }
-      if (autoSpeak.checked && lastAnswer) speak(lastAnswer, card);
+      if (autoSpeak.checked && lastAnswer) speakAnswer(lastAnswer, card);
       else setState("idle");
     } catch {
       addMessage("error", "Could not reach the server. Make sure the app is running and try again.");
@@ -407,12 +552,30 @@
   }
   orbBtn.addEventListener("click", () => {
     if (busy) return;
+    stopAllAudio();
     if (recording) stopRecording();
-    else {
-      stopSpeaking();
-      startRecording();
-    }
+    else startRecording();
   });
+
+  /* ---------- premium voice picker ---------- */
+  function fillVoices(list, current) {
+    if (!voiceSel) return;
+    voiceSel.innerHTML = "";
+    (list && list.length ? list : TTS_VOICES).forEach((v) => {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+      voiceSel.appendChild(o);
+    });
+    voiceSel.value = selectedVoice() && (list || TTS_VOICES).includes(selectedVoice())
+      ? selectedVoice() : (current || TTS_DEFAULT);
+    try { localStorage.setItem("voiceai_voice", voiceSel.value); } catch {}
+  }
+  if (voiceSel) {
+    voiceSel.addEventListener("change", () => {
+      try { localStorage.setItem("voiceai_voice", voiceSel.value); } catch {}
+    });
+  }
 
   /* ---------- init ---------- */
   if (!hasTts) {

@@ -52,10 +52,10 @@
       <button type="button" class="btn btn-ghost btn-sm" id="replayBtn" disabled>↻ Replay answer</button>
       <button type="button" class="btn btn-ghost btn-sm" id="pauseBtn" disabled>⏸ Pause</button>
       <button type="button" class="btn btn-ghost btn-sm" id="stopBtn" disabled>■ Stop speaking</button>
-      <label class="voice-pick" title="Premium voice">
+      <label class="voice-pick" title="Voice">
         <span aria-hidden="true">🎙</span>
-        <span class="sr-only">Premium voice</span>
-        <select id="voiceSel" class="voice-sel" aria-label="Premium voice"></select>
+        <span class="sr-only">Voice</span>
+        <select id="voiceSel" class="voice-sel" aria-label="Voice"></select>
       </label>
       <label class="toggle" title="Speak answers aloud automatically">
         <input type="checkbox" id="autoSpeak" checked />
@@ -90,7 +90,7 @@
   </section>
 
   <footer class="foot">
-      <p>VoiceAI runs locally — recordings stay in this server's memory and only travel to your own Groq API key. Speech output uses the premium Groq voice, falling back to your browser's built-in voices. <span class="muted">Never share your <code>.env</code> file.</span></p>
+      <p>VoiceAI runs locally — recordings stay in this server's memory and only travel to your own Groq API key. Speech output uses your browser's built-in voices. <span class="muted">Never share your <code>.env</code> file.</span></p>
   </footer>
 </main>
 

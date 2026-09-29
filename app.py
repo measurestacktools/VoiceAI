@@ -16,16 +16,12 @@ Docs verified live 2026:
 - TTS: browser-native Web Speech API (no Groq TTS dependency, zero cost)
 """
 
-import hashlib
-import io
 import logging
 import os
-import re
-import wave
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import (
     APIConnectionError,
@@ -44,8 +40,6 @@ log = logging.getLogger("voiceai")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
 STT_MODEL = os.getenv("STT_MODEL", "whisper-large-v3-turbo").strip() or "whisper-large-v3-turbo"
-TTS_MODEL = os.getenv("TTS_MODEL", "canopylabs/orpheus-v1-english").strip() or "canopylabs/orpheus-v1-english"
-TTS_VOICE = os.getenv("TTS_VOICE", "autumn").strip().lower() or "autumn"
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip()
 try:
     MAX_AUDIO_MB = float(os.getenv("MAX_AUDIO_MB", "10"))
@@ -62,15 +56,6 @@ ALLOWED_MIME = {
 }
 
 HISTORY_TURNS = 8  # previous Q/A pairs kept; bounds request size
-
-# Orpheus voices (English) per https://console.groq.com/docs/text-to-speech/orpheus.
-ALLOWED_VOICES = {"autumn", "diana", "hannah", "austin", "daniel", "troy"}
-if TTS_VOICE not in ALLOWED_VOICES:
-    TTS_VOICE = "autumn"
-TTS_CHUNK_CHARS = 190   # Orpheus caps input at 200 chars; stay safely under
-TTS_TEXT_MAX = 2000     # max text per /api/speak call (bounds spend: ~10 chunks)
-TTS_CACHE_MAX = 20      # session cache entries (same answer never billed twice)
-TTS_CACHE_BYTES = 12 * 1024 * 1024
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -94,34 +79,6 @@ class KeyPayload(BaseModel):
 
 class ChatPayload(BaseModel):
     text: str = ""
-
-
-class SpeakPayload(BaseModel):
-    text: str = ""
-    voice: str = ""
-
-
-# Session cache: sha1(model|voice|text) -> wav bytes. Same response spoken
-# twice costs one TTS generation. Bounded; memory-only; cleared on restart.
-_tts_cache: dict[str, bytes] = {}
-_tts_cache_bytes = 0
-
-
-def _cache_get(key: str) -> bytes | None:
-    return _tts_cache.get(key)
-
-
-def _cache_put(key: str, data: bytes) -> None:
-    global _tts_cache_bytes
-    if key in _tts_cache:
-        return
-    while _tts_cache and (len(_tts_cache) >= TTS_CACHE_MAX
-                          or _tts_cache_bytes + len(data) > TTS_CACHE_BYTES):
-        old_key, old_val = next(iter(_tts_cache.items()))
-        del _tts_cache[old_key]
-        _tts_cache_bytes -= len(old_val)
-    _tts_cache[key] = data
-    _tts_cache_bytes += len(data)
 
 
 def _effective_key() -> str:
@@ -185,14 +142,7 @@ def _friendly_groq_error(exc: Exception) -> tuple[int, str]:
             return 502, (
                 "A Groq model was not found. It may have been renamed — check "
                 "https://console.groq.com/docs/models for current model names "
-                "and update STT_MODEL / GROQ_MODEL / TTS_MODEL in your .env file."
-            )
-        if "model_terms_required" in detail:
-            return 400, (
-                "This premium voice needs a one-time approval in your Groq account: "
-                "open https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english "
-                "and accept the model terms once. Until then, VoiceAI automatically "
-                "uses your browser voice instead — everything keeps working."
+                "and update STT_MODEL / GROQ_MODEL in your .env file."
             )
         return status, f"Groq API error (HTTP {status}). Details: {detail}"
     return 500, f"Unexpected server error: {str(exc)[:300]}"
@@ -231,9 +181,6 @@ def api_status():
         "source": source,
         "model": GROQ_MODEL,
         "stt_model": STT_MODEL,
-        "tts_model": TTS_MODEL,
-        "tts_voice": TTS_VOICE,
-        "tts_voices": sorted(ALLOWED_VOICES),
         "max_audio_mb": MAX_AUDIO_MB,
         "message": message,
     }
@@ -417,130 +364,6 @@ def api_chat(payload: ChatPayload):
     return {"answer": answer, "model": GROQ_MODEL, "turns": len(_history)}
 
 
-_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def _split_tts_chunks(text: str) -> list[str]:
-    """Split text into sentence-aware pieces of at most TTS_CHUNK_CHARS."""
-    text = re.sub(r"\s+", " ", text).strip()
-    if not text:
-        return []
-    sentences = [s.strip() for s in _SENTENCE_RE.split(text) if s.strip()]
-    chunks: list[str] = []
-    current = ""
-    for sent in sentences:
-        while len(sent) > TTS_CHUNK_CHARS:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.append(sent[:TTS_CHUNK_CHARS])
-            sent = sent[TTS_CHUNK_CHARS:]
-        if current and len(current) + len(sent) + 1 > TTS_CHUNK_CHARS:
-            chunks.append(current)
-            current = ""
-        current = (current + " " + sent).strip() if current else sent
-    if current:
-        chunks.append(current)
-    return [c for c in chunks if c]
-
-
-def _concat_wavs(parts: list[bytes]) -> bytes:
-    """Concatenate same-format WAV bytes into one WAV. Raises ValueError."""
-    if len(parts) == 1:
-        return parts[0]
-    params = None
-    frames = b""
-    for blob in parts:
-        try:
-            with wave.open(io.BytesIO(blob), "rb") as w:
-                p = (w.getnchannels(), w.getsampwidth(), w.getframerate())
-                if params is None:
-                    params = p
-                elif p != params:
-                    raise ValueError("TTS returned mixed audio formats.")
-                frames += w.readframes(w.getnframes())
-        except wave.Error as e:
-            raise ValueError(f"TTS returned invalid audio: {e}")
-    out = io.BytesIO()
-    with wave.open(out, "wb") as w:
-        w.setnchannels(params[0])
-        w.setsampwidth(params[1])
-        w.setframerate(params[2])
-        w.writeframes(frames)
-    return out.getvalue()
-
-
-@app.post("/api/speak")
-def api_speak(payload: SpeakPayload):
-    """Synthesize speech with Groq Orpheus TTS; returns a single WAV.
-
-    Long texts are split into sentence-aware chunks (Orpheus caps input at
-    200 chars) and concatenated. Results are cached per session so replaying
-    the same answer costs nothing extra.
-    """
-    text = (payload.text or "").strip()
-    if not text:
-        return JSONResponse(status_code=400, content={"error": "Nothing to speak yet."})
-    if len(text) > TTS_TEXT_MAX:
-        return JSONResponse(
-            status_code=400,
-            content={"error": (
-                f"That answer is too long to speak at once (max {TTS_TEXT_MAX} characters).")},
-        )
-    voice = (payload.voice or TTS_VOICE).strip().lower()
-    if voice not in ALLOWED_VOICES:
-        return JSONResponse(
-            status_code=400,
-            content={"error": (
-                f"Unknown voice '{payload.voice}'. "
-                f"Choose one of: {', '.join(sorted(ALLOWED_VOICES))}.")},
-        )
-
-    api_key = _effective_key()
-    if not api_key:
-        return JSONResponse(
-            status_code=401,
-            content={"error": (
-                "No API key configured. Click Settings (top right) to paste your "
-                "Groq key, or copy .env.example to .env, add your key from "
-                "https://console.groq.com/keys, then restart the app.")},
-        )
-
-    cache_key = hashlib.sha1(f"{TTS_MODEL}|{voice}|{text}".encode()).hexdigest()
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return Response(content=cached, media_type="audio/wav",
-                        headers={"X-TTS-Cache": "HIT", "X-TTS-Model": TTS_MODEL})
-
-    chunks = _split_tts_chunks(text)
-    if not chunks:
-        return JSONResponse(status_code=400, content={"error": "Nothing to speak yet."})
-    try:
-        client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
-        parts: list[bytes] = []
-        for piece in chunks:
-            resp = client.audio.speech.create(
-                model=TTS_MODEL,
-                voice=voice,
-                input=piece,
-                response_format="wav",
-            )
-            data = resp.read()
-            if not data:
-                raise ValueError("TTS returned empty audio.")
-            parts.append(data)
-        wav = _concat_wavs(parts)
-    except ValueError as ve:
-        return JSONResponse(status_code=502, content={"error": str(ve)})
-    except Exception as exc:
-        log.exception("Groq TTS failed")
-        status, msg = _friendly_groq_error(exc)
-        return JSONResponse(status_code=status, content={"error": msg})
-
-    _cache_put(cache_key, wav)
-    return Response(content=wav, media_type="audio/wav",
-                    headers={"X-TTS-Cache": "MISS", "X-TTS-Model": TTS_MODEL,
-                             "X-TTS-Chunks": str(len(chunks))})
 @app.delete("/api/history")
 def api_clear_history():
     """Forget the current-session conversation (server and UI)."""

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VoiceAI — Talk with AI</title>
+<meta name="description" content="VoiceAI — a real AI voice assistant. Speak, get Groq-powered answers, and hear them spoken back." />
+<link rel="stylesheet" href="/static/styles.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23c2410c'/%3E%3Crect x='12' y='5' width='8' height='13' rx='4' fill='white'/%3E%3Cpath d='M8 14a8 8 0 0 0 16 0' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3Cpath d='M16 22v4M13 26h6' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
+</head>
+<body>
+<div class="bg-glow" aria-hidden="true"><span class="glow glow-a"></span><span class="glow glow-b"></span></div>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="30" height="30"><rect width="32" height="32" rx="9" fill="#c2410c"/><rect x="12" y="5" width="8" height="13" rx="4" fill="white"/><path d="M8 14a8 8 0 0 0 16 0" stroke="white" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M16 22v4M13 26h6" stroke="white" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </span>
+      <span class="brand-text"><strong>VoiceAI</strong><em>ai voice assistant</em></span>
+    </div>
+    <div class="header-actions">
+      <div class="status-pill" id="apiStatus" role="status" aria-live="polite">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Checking API…</span>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm settings-btn" id="settingsBtn" aria-haspopup="dialog" aria-label="Open API settings">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- VOICE STAGE -->
+  <section class="panel stage" aria-label="Voice controls">
+    <div class="orb-wrap">
+      <button type="button" class="orb" id="orbBtn" data-state="idle" aria-label="Tap to speak">
+        <span class="orb-core" aria-hidden="true">
+          <svg class="ic-mic" viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/></svg>
+          <span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="spinner" aria-hidden="true"></span>
+        </span>
+      </button>
+    </div>
+    <h1 class="stage-title" id="stageTitle">Tap to speak</h1>
+    <p class="stage-sub" id="stageSub">Ready when you are</p>
+    <p class="stage-error" id="stageError" role="alert" hidden></p>
+
+    <div class="stage-controls">
+      <button type="button" class="btn btn-ghost btn-sm" id="replayBtn" disabled>↻ Replay answer</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="stopBtn" disabled>■ Stop speaking</button>
+      <label class="toggle" title="Speak answers aloud automatically">
+        <input type="checkbox" id="autoSpeak" checked />
+        <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+        Auto-speak
+      </label>
+    </div>
+  </section>
+
+  <!-- CONVERSATION -->
+  <section class="panel convo" aria-label="Conversation">
+    <div class="panel-head">
+      <h2>Conversation</h2>
+      <div class="convo-tools">
+        <span class="model-tag" id="modelTag" hidden></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="clearBtn">Clear</button>
+      </div>
+    </div>
+    <div class="messages" id="messages" aria-live="polite">
+      <div class="convo-empty" id="convoEmpty">
+        <p><strong>Nothing said yet.</strong></p>
+        <p class="muted">Tap the orb and speak — or type below if you have no microphone.</p>
+      </div>
+    </div>
+
+    <form class="composer" id="composer" autocomplete="off">
+      <label class="sr-only" for="textInput">Type a message instead of speaking</label>
+      <input type="text" id="textInput" class="text-input" maxlength="2000" placeholder="Type here if you can't use the mic…" />
+      <button type="submit" class="btn btn-primary" id="sendBtn">Send ➤</button>
+    </form>
+    <p class="field-error" id="chatError" role="alert" hidden></p>
+  </section>
+
+  <footer class="foot">
+    <p>VoiceAI runs locally — recordings stay in this server's memory and only travel to your own Groq API key. Speech output uses your browser's built-in voices. <span class="muted">Never share your <code>.env</code> file.</span></p>
+  </footer>
+</main>
+
+<script src="/static/app.js" defer></script>
+
+<div class="modal-backdrop" id="settingsModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-head">
+      <h2 id="settingsTitle">API Settings</h2>
+      <button type="button" class="btn btn-ghost btn-sm" id="settingsClose" aria-label="Close settings">✕</button>
+    </div>
+    <p class="muted modal-sub">Paste your Groq API key — no <code>.env</code> editing needed. It's verified instantly, kept only in the server's memory, and never shown again.</p>
+    <div class="key-state" id="keyState" role="status">Checking…</div>
+    <form id="keyForm" autocomplete="off">
+      <label class="field-label" for="keyInput">Groq API key</label>
+      <input type="password" id="keyInput" class="text-input" placeholder="gsk_…" autocomplete="off" spellcheck="false" />
+    </form>
+    <p class="field-error" id="keyError" role="alert" hidden></p>
+    <p class="key-ok" id="keyOk" role="status" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="keySave">
+        <span class="btn-label">Save key</span>
+        <span class="spinner" id="keySpinner" hidden aria-hidden="true"></span>
+      </button>
+      <button type="button" class="btn btn-ghost" id="keyRemove">Remove</button>
+    </div>
+    <p class="muted modal-foot">No key yet? <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Create a free one at console.groq.com/keys</a>. The key clears when the server restarts — put it in <code>.env</code> to keep it permanently.</p>
+  </div>
+</div>
+</body>
+</html>

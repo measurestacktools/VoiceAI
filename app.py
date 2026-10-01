@@ -45,6 +45,10 @@ try:
     MAX_AUDIO_MB = float(os.getenv("MAX_AUDIO_MB", "10"))
 except ValueError:
     MAX_AUDIO_MB = 10.0
+if not MAX_AUDIO_MB > 0:
+    MAX_AUDIO_MB = 10.0
+if MAX_AUDIO_MB > 25:
+    MAX_AUDIO_MB = 25.0  # Groq STT hard limit
 MAX_AUDIO_BYTES = int(MAX_AUDIO_MB * 1024 * 1024)
 
 # Matches Groq's documented STT formats (+ common browser container aliases).
@@ -231,7 +235,7 @@ async def api_transcribe(request: Request, audio: UploadFile | None = File(defau
     """Accept recorded audio (kept in memory) and return Groq's transcript."""
     if audio is None or not audio.filename:
         return JSONResponse(
-            status_code=400, content={"error": "No audio received. Press the orb and speak first."})
+            status_code=400, content={"error": "No audio received. Press the mic button and speak first."})
 
     mime = (audio.content_type or "").lower().split(";")[0].strip()
     ext = os.path.splitext(audio.filename or "")[1].lower()
@@ -361,6 +365,7 @@ def api_chat(payload: ChatPayload):
         return JSONResponse(status_code=status, content={"error": msg})
 
     _history.append({"q": text, "a": answer})
+    del _history[:-20]  # bound in-memory log; only last HISTORY_TURNS are sent
     return {"answer": answer, "model": GROQ_MODEL, "turns": len(_history)}
 
 

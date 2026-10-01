@@ -1,4 +1,4 @@
-/* VoiceAI frontend — vanilla JS. Mic -> Groq STT -> Groq chat -> browser TTS. */
+/* VoiceAI frontend — vanilla JS. Mic -> Groq STT -> Groq chat -> browser TTS. Broadcast-console edition. */
 (() => {
   const $ = (id) => document.getElementById(id);
   const apiStatus = $("apiStatus"), statusText = $("statusText");
@@ -13,6 +13,7 @@
   const messages = $("messages"), convoEmpty = $("convoEmpty"), modelTag = $("modelTag");
   const clearBtn = $("clearBtn"), composer = $("composer"), textInput = $("textInput");
   const chatError = $("chatError");
+  const vuFill = $("vuFill"), recTimer = $("recTimer"), onAir = $("onAirLamp");
 
   let keySource = null;
   let statusTimer = null;
@@ -23,6 +24,9 @@
   let lastAnswer = "";
   let lastAiCard = null;
   let stream = null;
+  // VU meter + record timer handles
+  let audioCtx = null, analyser = null, vuRaf = 0, recClock = 0, recSecs = 0;
+  const MAX_REC_SECS = 60;
 
   const hasTts = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
   const hasMic = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
@@ -30,8 +34,72 @@
 
   function show(el) { el.hidden = false; }
   function hide(el) { el.hidden = true; }
-  function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  /* ---------- broadcast lamps / VU ---------- */
+  function setOnAir(lit) {
+    if (!onAir) return;
+    if (lit) onAir.classList.add("lit");
+    else onAir.classList.remove("lit");
+  }
+  function setVu(pct) {
+    if (!vuFill) return;
+    const v = Math.max(0, Math.min(100, pct));
+    vuFill.style.width = v + "%";
+    if (v >= 85) vuFill.classList.add("hot");
+    else vuFill.classList.remove("hot");
+  }
+  function fmtClock(s) {
+    const m = String(Math.floor(s / 60)).padStart(2, "0");
+    const r = String(s % 60).padStart(2, "0");
+    return m + ":" + r;
+  }
+  function setClock(s) {
+    recSecs = s;
+    if (recTimer) recTimer.textContent = fmtClock(s);
+  }
+  function startVuMeter(srcStream) {
+    stopVuMeter();
+    setVu(2);
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = new AC();
+      const src = audioCtx.createMediaStreamSource(srcStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      const buf = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        try {
+          analyser.getByteTimeDomainData(buf);
+          let peak = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const d = Math.abs(buf[i] - 128) / 128;
+            if (d > peak) peak = d;
+          }
+          setVu(4 + peak * 96);
+        } catch { /* keep last level */ }
+        vuRaf = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch { /* VU is decorative; recording still works */ }
+  }
+  function stopVuMeter() {
+    if (vuRaf) { try { cancelAnimationFrame(vuRaf); } catch {} vuRaf = 0; }
+    if (audioCtx) { try { audioCtx.close(); } catch {} audioCtx = null; }
+    analyser = null;
+    setVu(0);
+  }
+  function startRecClock() {
+    stopRecClock();
+    setClock(0);
+    recClock = setInterval(() => {
+      setClock(recSecs + 1);
+      if (recSecs >= MAX_REC_SECS) stopRecording(); // auto-stop at 60s
+    }, 1000);
+  }
+  function stopRecClock() {
+    if (recClock) { clearInterval(recClock); recClock = 0; }
   }
 
   /* ---------- orb state machine ---------- */
@@ -49,6 +117,7 @@
       name === "processing" ? "Processing your message" : "Speaking the answer");
     stageTitle.textContent = STATES[name][0];
     stageSub.textContent = (typeof sub === "string" && sub) ? sub : STATES[name][1];
+    setOnAir(name === "listening" || name === "speaking");
   }
   function setStageError(msg) {
     if (!msg) { hide(stageError); stageError.textContent = ""; return; }
@@ -219,13 +288,14 @@
     if (!busy && !recording) setState("idle");
   }
   function stopAllAudio() {
-    try { speechSynthesis.cancel(); } catch {}
+    if (hasTts) { try { speechSynthesis.cancel(); } catch {} }
     markIdle();
   }
   function getSavedVoiceURI() {
     try { return localStorage.getItem("voiceai_voice") || ""; } catch { return ""; }
   }
   function pickVoice(uri) {
+    if (!hasTts) return null;
     try {
       const voices = speechSynthesis.getVoices() || [];
       if (uri) {
@@ -239,7 +309,7 @@
     }
   }
   function populateVoices() {
-    if (!voiceSel) return;
+    if (!voiceSel || !hasTts) return;
     let voices = [];
     try { voices = speechSynthesis.getVoices() || []; } catch { voices = []; }
     const en = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith("en"));
@@ -308,6 +378,7 @@
   }
   stopBtn.addEventListener("click", stopAllAudio);
   pauseBtn.addEventListener("click", () => {
+    if (!hasTts) return;
     try {
       if (speechSynthesis.speaking && !speechSynthesis.paused) {
         speechSynthesis.pause();
@@ -325,13 +396,13 @@
   });
 
   /* ---------- chat ---------- */
-  async function askText(text) {
+  async function askText(text, alreadyBusy) {
     setChatError("");
     setStageError("");
     const q = (text || "").trim();
     if (!q) { setChatError("Please speak or type a message first."); return; }
     addMessage("user", q);
-    busy = true;
+    if (!alreadyBusy) busy = true;
     setState("processing");
     try {
       const res = await fetch("/api/chat", {
@@ -359,7 +430,7 @@
       addMessage("error", "Could not reach the server. Make sure the app is running and try again.");
       setState("idle");
     } finally {
-      busy = false;
+      if (!alreadyBusy) busy = false;
     }
   }
   composer.addEventListener("submit", (e) => {
@@ -421,8 +492,12 @@
       recorder.start();
       recording = true;
       setState("listening");
+      startVuMeter(stream);
+      startRecClock();
     } catch (err) {
       setStageError("Recording failed to start. Type your message below instead.");
+      stopVuMeter();
+      stopRecClock();
       stopStream();
     }
   }
@@ -435,6 +510,8 @@
   function stopRecording() {
     if (!recording || !recorder) return;
     recording = false;
+    stopVuMeter();
+    stopRecClock();
     try {
       if (recorder.state !== "inactive") recorder.stop();
     } catch {
@@ -443,8 +520,10 @@
     stopStream();
   }
   async function onRecordStop() {
+    stopVuMeter();
+    stopRecClock();
     if (!audioChunks.length) {
-      setStageError("Nothing was recorded. Tap the orb and speak for at least a second.");
+      setStageError("Nothing was recorded. Tap the mic button and speak for at least a second.");
       setState("idle");
       return;
     }
@@ -455,7 +534,7 @@
   }
   async function sendAudio(blob) {
     busy = true;
-    setState("processing");
+    setState("processing", recSecs > 0 ? "Tape rolling " + fmtClock(recSecs) + " — transcribing…" : undefined);
     try {
       const ext = (blob.type || "").includes("mp4") ? "recording.m4a" : "recording.webm";
       const form = new FormData();
@@ -467,12 +546,13 @@
         setState("idle");
         return;
       }
-      await askText(data.transcript || "");
+      await askText(data.transcript || "", true);
     } catch {
       addMessage("error", "Could not reach the server. Make sure the app is running and try again.");
       setState("idle");
     } finally {
       busy = false;
+      setClock(0);
     }
   }
   orbBtn.addEventListener("click", () => {
@@ -488,6 +568,8 @@
     autoSpeak.disabled = true;
   }
   populateVoices();
+  setClock(0);
+  setVu(0);
   setState("idle");
   loadStatus();
 })();

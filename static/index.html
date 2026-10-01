@@ -5,21 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>VoiceAI — Talk with AI</title>
 <meta name="description" content="VoiceAI — a real AI voice assistant. Speak, get Groq-powered answers, and hear them spoken back." />
-<link rel="stylesheet" href="/static/styles.css" />
+<link rel="stylesheet" href="/static/styles.css?v=2" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23c2410c'/%3E%3Crect x='12' y='5' width='8' height='13' rx='4' fill='white'/%3E%3Cpath d='M8 14a8 8 0 0 0 16 0' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3Cpath d='M16 22v4M13 26h6' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
 </head>
 <body>
-<div class="bg-glow" aria-hidden="true"><span class="glow glow-a"></span><span class="glow glow-b"></span></div>
-
+<div class="console-frame">
 <header class="topbar">
   <div class="wrap topbar-inner">
     <div class="brand">
       <span class="logo" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="30" height="30"><rect width="32" height="32" rx="9" fill="#c2410c"/><rect x="12" y="5" width="8" height="13" rx="4" fill="white"/><path d="M8 14a8 8 0 0 0 16 0" stroke="white" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M16 22v4M13 26h6" stroke="white" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <svg viewBox="0 0 32 32" width="30" height="30"><rect width="32" height="32" rx="6" fill="#3b2716"/><rect x="12" y="5" width="8" height="13" rx="4" fill="#f3e9d2"/><path d="M8 14a8 8 0 0 0 16 0" stroke="#f3e9d2" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M16 22v4M13 26h6" stroke="#c1272d" stroke-width="2.2" stroke-linecap="round"/></svg>
       </span>
-      <span class="brand-text"><strong>VoiceAI</strong><em>ai voice assistant</em></span>
+      <span class="brand-text"><strong>VoiceAI</strong><em>BROADCAST CONSOLE · CH-01</em></span>
     </div>
     <div class="header-actions">
+      <div class="onair" id="onAirLamp" aria-hidden="true"><span class="onair-lamp"></span>ON AIR</div>
       <div class="status-pill" id="apiStatus" role="status" aria-live="polite">
         <span class="dot" id="statusDot"></span>
         <span id="statusText">Checking API…</span>
@@ -35,10 +35,16 @@
 <main class="wrap">
   <!-- VOICE STAGE -->
   <section class="panel stage" aria-label="Voice controls">
+    <p class="strip-label">MIC CHANNEL · 60 SEC MAX · VU CALIBRATED</p>
+    <div class="vu" aria-hidden="true">
+      <span class="vu-tag">LEVEL</span>
+      <span class="vu-track"><span class="vu-fill" id="vuFill"></span><span class="vu-ticks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span>
+      <span class="vu-tag" id="recTimer">00:00</span>
+    </div>
     <div class="orb-wrap">
       <button type="button" class="orb" id="orbBtn" data-state="idle" aria-label="Tap to speak">
         <span class="orb-core" aria-hidden="true">
-          <svg class="ic-mic" viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/></svg>
+          <svg class="ic-mic" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/></svg>
           <span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
           <span class="spinner" aria-hidden="true"></span>
         </span>
@@ -68,7 +74,7 @@
   <!-- CONVERSATION -->
   <section class="panel convo" aria-label="Conversation">
     <div class="panel-head">
-      <h2>Conversation</h2>
+      <h2>TRANSMISSION LOG</h2>
       <div class="convo-tools">
         <span class="model-tag" id="modelTag" hidden></span>
         <button type="button" class="btn btn-ghost btn-sm" id="clearBtn">Clear</button>
@@ -77,7 +83,7 @@
     <div class="messages" id="messages" aria-live="polite">
       <div class="convo-empty" id="convoEmpty">
         <p><strong>Nothing said yet.</strong></p>
-        <p class="muted">Tap the orb and speak — or type below if you have no microphone.</p>
+        <p class="muted">Tap the mic button and speak — or type below if you have no microphone.</p>
       </div>
     </div>
 
@@ -93,8 +99,9 @@
       <p>VoiceAI runs locally — recordings stay in this server's memory and only travel to your own Groq API key. Speech output uses your browser's built-in voices. <span class="muted">Never share your <code>.env</code> file.</span></p>
   </footer>
 </main>
+</div>
 
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v=2" defer></script>
 
 <div class="modal-backdrop" id="settingsModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
